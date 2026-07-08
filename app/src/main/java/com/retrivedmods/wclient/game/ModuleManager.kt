@@ -36,6 +36,7 @@ import com.retrivedmods.wclient.game.module.misc.ChestStealerModule
 import com.retrivedmods.wclient.game.module.misc.SpammerModule
 import com.retrivedmods.wclient.game.module.misc.ToggleSoundModule
 import com.retrivedmods.wclient.game.module.misc.WaterMarkModule
+import com.retrivedmods.wclient.game.module.misc.AutoEzzModule
 import com.retrivedmods.wclient.game.module.world.AntiDebuffModule
 import com.retrivedmods.wclient.game.module.world.EffectsModule
 import com.retrivedmods.wclient.game.module.world.ParticlesModule
@@ -65,7 +66,6 @@ import com.retrivedmods.wclient.game.module.visual.SpeedDisplayModule
 import com.retrivedmods.wclient.game.module.visual.WorldStateModule
 import com.retrivedmods.wclient.game.module.visual.ZoomModule
 import com.retrivedmods.wclient.game.module.visual.TargetHudModule
-import com.retrivedmods.wclient.game.module.visual.AutoEzzModule
 import com.retrivedmods.wclient.game.module.world.FreeCameraModule
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -134,7 +134,6 @@ object ModuleManager {
             add(CrosshairModule())
             add(TargetHudModule())
             add(FullbrightModule())
-            add(AutoEzzModule())
 
             // World
             add(FreeCameraModule())
@@ -161,6 +160,7 @@ object ModuleManager {
             add(FakeDeathModule())
             add(FakeXPModule())
             add(MinerModule())
+            add(AutoEzzModule())
         }
     }
 

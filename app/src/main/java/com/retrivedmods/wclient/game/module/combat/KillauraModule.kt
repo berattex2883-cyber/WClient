@@ -8,9 +8,6 @@ import com.retrivedmods.wclient.game.friend.FriendManager
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
-import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
-import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.TransactionType
-import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryActionType
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
@@ -24,7 +21,7 @@ class KillauraModule : Module("killaura", ModuleCategory.Combat) {
     private var mobsOnly by boolValue("mobs_only", false)
     private var antiBot by boolValue("anti_bot", true)
 
-    // Spoofing ayarları (tpAura her zaman açık, sadece mesafe ve yükseklik ayarlanabilir)
+    // Spoofing ayarları (tpAura sabit açık)
     private var keepDistance by floatValue("keep_distance", 1.2f, 0.5f..10f)
     private var tpYOffset by intValue("tp_y_offset", 1, -10..10)
 
@@ -51,7 +48,6 @@ class KillauraModule : Module("killaura", ModuleCategory.Combat) {
 
         val now = System.currentTimeMillis()
 
-        // Rastgele gecikme (anticheat bypass)
         val baseDelay = (1000.0 / cpsValue).toLong()
         val jitter = (baseDelay * 0.2).toLong()
         val delay = baseDelay + random.nextLong(-jitter, jitter)
@@ -63,7 +59,7 @@ class KillauraModule : Module("killaura", ModuleCategory.Combat) {
         val target = targets.first()
         if (target is Player && FriendManager.isFriend(target.uuid)) return
 
-        // ===== SALDIRI + POZİSYON SPOOFING (TEK SEFERLİK) =====
+        // ===== SALDIRI + POZİSYON SPOOFING =====
         attackWithSpoof(target)
 
         lastAttackTime = now
@@ -91,24 +87,24 @@ class KillauraModule : Module("killaura", ModuleCategory.Combat) {
         }
     }
 
-    // ========== SALDIRI + SPOOFING (TEK PAKET) ==========
+    // ========== SALDIRI + SPOOFING (SADECE MovePlayerPacket) ==========
     private fun attackWithSpoof(target: Entity) {
         val player = session.localPlayer
         val originalPos = player.vec3Position
+        val originalRot = player.vec3Rotation
 
-        // 1. Hedefin yakınına gidecek pozisyonu hesapla (arkasına veya önüne)
+        // Hedefin arkasına yakın pozisyon hesapla
         val targetPos = target.vec3Position
         val yawRad = Math.toRadians(target.vec3Rotation.y.toDouble()).toFloat()
         val behind = Vector3f.from(sin(yawRad), 0f, -cos(yawRad)).normalize()
 
-        // Teleport pozisyonu (hedefin arkasına, keepDistance kadar yakın)
         val fakePos = Vector3f.from(
             targetPos.x + behind.x * keepDistance,
             targetPos.y + tpYOffset,
             targetPos.z + behind.z * keepDistance
         )
 
-        // 2. Pozisyonu spoofle (MovePlayerPacket ile)
+        // 1. Pozisyonu spoofle (hedefe yaklaş)
         session.clientBound(
             MovePlayerPacket().apply {
                 runtimeEntityId = player.runtimeEntityId
@@ -120,20 +116,15 @@ class KillauraModule : Module("killaura", ModuleCategory.Combat) {
             }
         )
 
-        // 3. Saldırı packet'ini gönder (InventoryTransactionPacket)
-        val attackPacket = InventoryTransactionPacket().apply {
-            transactionType = TransactionType.USE_ITEM
-            actionType = InventoryActionType.ATTACK
-            runtimeEntityId = target.runtimeEntityId
-        }
-        session.sendPacket(attackPacket)
+        // 2. Client'in kendi attack metodunu kullan (manuel packet yok)
+        player.attack(target)
 
-        // 4. Hemen eski pozisyona geri dön
+        // 3. Eski pozisyona geri dön (hemen)
         session.clientBound(
             MovePlayerPacket().apply {
                 runtimeEntityId = player.runtimeEntityId
                 position = originalPos
-                rotation = player.vec3Rotation // eski rotasyonu koru
+                rotation = originalRot
                 mode = MovePlayerPacket.Mode.NORMAL
                 onGround = false
                 tick = player.tickExists

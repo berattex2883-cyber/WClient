@@ -14,22 +14,28 @@ import kotlin.random.Random
 
 class KillauraModule : Module("killaura", ModuleCategory.Combat) {
 
-    // ========== AYARLAR ==========
     private var rangeValue by floatValue("range", 150f, 10f..200f)
     private var cpsValue by intValue("cps", 3, 1..6)
+    private var packets by intValue("packets", 1, 1..1)
     private var playersOnly by boolValue("players_only", true)
     private var mobsOnly by boolValue("mobs_only", false)
     private var antiBot by boolValue("anti_bot", true)
 
-    // Spoofing ayarları (tpAura sabit açık)
-    private var keepDistance by floatValue("keep_distance", 1.2f, 0.5f..10f)
+    private var tpAuraEnabled by boolValue("tp_aura", true)
+    private var teleportBehind by boolValue("tp_behind", true)
+    private var tpSpeed by intValue("tp_speed", 50, 10..200)
     private var tpYOffset by intValue("tp_y_offset", 1, -10..10)
+    private var keepDistance by floatValue("keep_distance", 1.2f, 0.5f..10f)
 
-    // ========== DURUM ==========
+    private var strafe by boolValue("strafe", false)
+    private val strafeSpeed by floatValue("strafe_speed", 2.5f, 1f..4f)
+    private val strafeRadius by floatValue("strafe_radius", 2.5f, 1f..6f)
+
     private var lastAttackTime = 0L
+    private var tpCooldown = 0L
+    private var strafeAngle = 0f
     private val random = Random(System.currentTimeMillis())
 
-    // ========== BOT TESPİTİ ==========
     private fun Player.isBot(): Boolean {
         if (this is LocalPlayer) return false
         val playerListEntry = session.level.playerMap[this.uuid] ?: return true
@@ -41,7 +47,6 @@ class KillauraModule : Module("killaura", ModuleCategory.Combat) {
         return false
     }
 
-    // ========== ANA TETİKLEYİCİ ==========
     override fun beforePacketBound(interceptablePacket: InterceptablePacket) {
         if (!isEnabled) return
         if (interceptablePacket.packet !is PlayerAuthInputPacket) return
@@ -53,19 +58,37 @@ class KillauraModule : Module("killaura", ModuleCategory.Combat) {
         val delay = baseDelay + random.nextLong(-jitter, jitter)
         if (now - lastAttackTime < delay) return
 
+        val food = session.localPlayer.foodLevel
+        val effectiveDelay = if (food < 6) delay * 2 else delay
+        if (now - lastAttackTime < effectiveDelay) return
+
         val targets = searchForTargets()
         if (targets.isEmpty()) return
 
         val target = targets.first()
+
         if (target is Player && FriendManager.isFriend(target.uuid)) return
 
-        // ===== SALDIRI + POZİSYON SPOOFING =====
-        attackWithSpoof(target)
+        // 1. ROTATION SPOOFING (ATTACK ÖNCESİ)
+        rotateToTarget(target)
+
+        // 2. SALDIRI PAKETİ
+        repeat(packets) {
+            session.localPlayer.attack(target)
+        }
+
+        // 3. POZİSYON SPOOFING (SONRA)
+        if (tpAuraEnabled && now - tpCooldown >= tpSpeed) {
+            teleportTo(target)
+            tpCooldown = now
+        }
+
+        // 4. STRAFE
+        if (strafe) strafeAroundTarget(target)
 
         lastAttackTime = now
     }
 
-    // ========== HEDEF TARAMA ==========
     private fun searchForTargets(): List<Entity> {
         val player = session.localPlayer
         return session.level.entityMap.values
@@ -87,44 +110,49 @@ class KillauraModule : Module("killaura", ModuleCategory.Combat) {
         }
     }
 
-    // ========== SALDIRI + SPOOFING (SADECE MovePlayerPacket) ==========
-    private fun attackWithSpoof(target: Entity) {
+    private fun rotateToTarget(target: Entity) {
         val player = session.localPlayer
-        val originalPos = player.vec3Position
-        val originalRot = player.vec3Rotation
-
-        // Hedefin arkasına yakın pozisyon hesapla
         val targetPos = target.vec3Position
-        val yawRad = Math.toRadians(target.vec3Rotation.y.toDouble()).toFloat()
+        val playerPos = player.vec3Position
+        
+        val dx = targetPos.x - playerPos.x
+        val dz = targetPos.z - playerPos.z
+        val dy = (targetPos.y + 1.6f) - playerPos.y // Head height
+
+        val yaw = Math.toDegrees(Math.atan2(dz, dx).toDouble()).toFloat() - 90f
+        val pitch = -Math.toDegrees(Math.atan2(dy, Math.sqrt((dx*dx + dz*dz).toDouble())).toDouble()).toFloat()
+
+        player.rotationYaw = yaw
+        player.rotationPitch = pitch.coerceIn(-90f, 90f)
+    }
+
+    private fun teleportTo(entity: Entity) {
+        val player = session.localPlayer
+        val pos = entity.vec3Position
+
+        val yawRad = Math.toRadians(entity.vec3Rotation.y.toDouble()).toFloat()
         val behind = Vector3f.from(sin(yawRad), 0f, -cos(yawRad)).normalize()
 
-        val fakePos = Vector3f.from(
-            targetPos.x + behind.x * keepDistance,
-            targetPos.y + tpYOffset,
-            targetPos.z + behind.z * keepDistance
-        )
+        val tpPos = if (teleportBehind) {
+            Vector3f.from(
+                pos.x + behind.x * keepDistance,
+                pos.y + tpYOffset,
+                pos.z + behind.z * keepDistance
+            )
+        } else {
+            val dir = pos.sub(player.vec3Position).normalize()
+            Vector3f.from(
+                pos.x - dir.x * keepDistance,
+                pos.y + tpYOffset,
+                pos.z - dir.z * keepDistance
+            )
+        }
 
-        // 1. Pozisyonu spoofle (hedefe yaklaş)
         session.clientBound(
             MovePlayerPacket().apply {
                 runtimeEntityId = player.runtimeEntityId
-                position = fakePos
-                rotation = target.vec3Rotation // hedefe doğru dön
-                mode = MovePlayerPacket.Mode.NORMAL
-                onGround = false
-                tick = player.tickExists
-            }
-        )
-
-        // 2. Client'in kendi attack metodunu kullan (manuel packet yok)
-        player.attack(target)
-
-        // 3. Eski pozisyona geri dön (hemen)
-        session.clientBound(
-            MovePlayerPacket().apply {
-                runtimeEntityId = player.runtimeEntityId
-                position = originalPos
-                rotation = originalRot
+                position = tpPos
+                rotation = entity.vec3Rotation
                 mode = MovePlayerPacket.Mode.NORMAL
                 onGround = false
                 tick = player.tickExists
@@ -132,7 +160,26 @@ class KillauraModule : Module("killaura", ModuleCategory.Combat) {
         )
     }
 
-    // ========== MOB TESPİTİ ==========
+    private fun strafeAroundTarget(entity: Entity) {
+        val pos = entity.vec3Position
+        strafeAngle += strafeSpeed
+        if (strafeAngle >= 360f) strafeAngle -= 360f
+
+        val x = strafeRadius * cos(strafeAngle)
+        val z = strafeRadius * sin(strafeAngle)
+
+        session.clientBound(
+            MovePlayerPacket().apply {
+                runtimeEntityId = session.localPlayer.runtimeEntityId
+                position = pos.add(x.toFloat(), 0f, z.toFloat())
+                rotation = Vector3f.ZERO
+                mode = MovePlayerPacket.Mode.NORMAL
+                onGround = true
+                tick = session.localPlayer.tickExists
+            }
+        )
+    }
+
     private fun EntityUnknown.isMob(): Boolean {
         return this.identifier in MobList.mobTypes
     }
